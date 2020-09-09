@@ -15,6 +15,7 @@
 -- Conference on Machine Learning, in PMLR 70:3280-3288
 module Bandit.Exp4R
   ( -- * Interface
+    exp4r,
     Feedback (..),
 
     -- * State
@@ -45,92 +46,88 @@ import qualified Refined as R
 import qualified Refined.Unsafe as R
 
 -- | The EXP4R state
-data Exp4R s a er
-  = Exp4R
-      { t :: Int,
-        horizon :: R.Refined R.Positive Int,
-        lastAction :: Maybe (LastAction a),
-        k :: Int,
-        n :: Int,
-        lambda :: R.Refined R.NonNegative Double,
-        constraint :: ZeroOne Double,
-        experts ::
-          NonEmpty
-            ( ZeroOne Double,
-              er
-            )
-      }
+data Exp4R s a er = Exp4R
+  { t :: Int,
+    horizon :: R.Refined R.Positive Int,
+    lastAction :: Maybe (LastAction a),
+    k :: Int,
+    n :: Int,
+    lambda :: R.Refined R.NonNegative Double,
+    constraint :: ZeroOne Double,
+    experts ::
+      NonEmpty
+        ( ZeroOne Double,
+          er
+        )
+  }
   deriving (Generic)
 
 -- | Encapsulator for 'last action taken'
-data LastAction a
-  = LastAction
-      { action :: a,
-        globalProbabilityOfSample :: ZeroOne Double,
-        perExpertProbabilityOfSample :: NonEmpty (ZeroOne Double)
-      }
+data LastAction a = LastAction
+  { action :: a,
+    globalProbabilityOfSample :: ZeroOne Double,
+    perExpertProbabilityOfSample :: NonEmpty (ZeroOne Double)
+  }
   deriving (Generic)
 
 -- | Constructor for feedback from the environment.
-data Feedback
-  = Feedback
-      { cost :: ZeroOne Double,
-        risk :: ZeroOne Double
-      }
+data Feedback = Feedback
+  { cost :: ZeroOne Double,
+    risk :: ZeroOne Double
+  }
   deriving (Generic)
 
 -- | Hyperparameters.
-data Exp4RCfg s a er
-  = Exp4RCfg
-      { expertsCfg :: NonEmpty er,
-        constraintCfg :: ZeroOne Double,
-        horizonCfg :: R.Refined R.Positive Int,
-        as :: NonEmpty a
-      }
+data Exp4RCfg s a er = Exp4RCfg
+  { expertsCfg :: NonEmpty er,
+    constraintCfg :: ZeroOne Double,
+    horizonCfg :: R.Refined R.Positive Int,
+    as :: NonEmpty a
+  }
   deriving (Generic)
 
-instance
+exp4r ::
   (Eq a, ExpertRepresentation er s a) =>
   ContextualBandit (Exp4R s a er) (Exp4RCfg s a er) s a (Maybe Feedback) er
-  where
-
-  initCtx Exp4RCfg {..} =
-    Exp4R
-      { t = 1,
-        lastAction = Nothing,
-        k = NE.length as,
-        n = NE.length expertsCfg,
-        lambda = lambdaInitial,
-        constraint = constraintCfg,
-        horizon = horizonCfg,
-        experts = (R.unsafeRefine (1 / fromIntegral (NE.length expertsCfg)),) <$> expertsCfg
-      }
-
-  stepCtx g feedback s = do
-    weightedAdvice <- use #experts <&> fmap (fmap (($ s) . toExpert))
-    lastAction <- use #lastAction
-    fromMaybe
-      pass
-      (update weightedAdvice <$> lastAction <*> feedback)
-    let armDistribution :: NonEmpty (ZeroOne Double, a)
-        armDistribution =
-          fromMaybe
-            (panic "internal Exp4R algorithm failure: distribution normalization failed.")
-            (combineAdvice weightedAdvice)
-        (a, g') = sampleWL armDistribution g
-        p_a =
-          maybe
-            (panic "internal Exp4R algorithm failure: arm pull issue.")
-            fst
-            (find (\x -> snd x == a) armDistribution)
-        probabilityOf_a :: NonEmpty (ZeroOne Double)
-        probabilityOf_a = snd <$> weightedAdvice <&> \e ->
-          maybe
-            (panic "internal Exp4R algorithm failure: weight computation")
-            fst
-            (find (\x -> snd x == a) e)
-    #lastAction ?= LastAction a p_a probabilityOf_a
-    return (a, g')
+exp4r =
+  ContextualBandit
+    { initCtx = \Exp4RCfg {..} ->
+        Exp4R
+          { t = 1,
+            lastAction = Nothing,
+            k = NE.length as,
+            n = NE.length expertsCfg,
+            lambda = lambdaInitial,
+            constraint = constraintCfg,
+            horizon = horizonCfg,
+            experts = (R.unsafeRefine (1 / fromIntegral (NE.length expertsCfg)),) <$> expertsCfg
+          },
+      stepCtx = \g feedback s -> do
+        weightedAdvice <- use #experts <&> fmap (fmap (($ s) . toExpert))
+        lastAction <- use #lastAction
+        fromMaybe
+          pass
+          (update weightedAdvice <$> lastAction <*> feedback)
+        let armDistribution =
+              fromMaybe
+                (panic "internal Exp4R algorithm failure: distribution normalization failed.")
+                (combineAdvice weightedAdvice)
+            (a, g') = sampleWL armDistribution g
+            p_a =
+              maybe
+                (panic "internal Exp4R algorithm failure: arm pull issue.")
+                fst
+                (find (\x -> snd x == a) armDistribution)
+            probabilityOf_a :: NonEmpty (ZeroOne Double)
+            probabilityOf_a =
+              snd <$> weightedAdvice <&> \e ->
+                maybe
+                  (panic "internal Exp4R algorithm failure: weight computation")
+                  fst
+                  (find (\x -> snd x == a) e)
+        #lastAction ?= LastAction a p_a probabilityOf_a
+        return (a, g')
+    }
 
 update ::
   (MonadState (Exp4R s a er) m) =>
@@ -164,14 +161,17 @@ combineAdvice ::
   (Ord a) =>
   NonEmpty (ZeroOne Double, NonEmpty (ZeroOne Double, a)) ->
   Maybe (NonEmpty (ZeroOne Double, a))
-combineAdvice weightedAdvice = normalizeDistribution $
-  groupAllWith1 snd dirtyArmDistribution
-    <&> \gs -> (getSum $ sconcat (gs <&> Sum . fst), snd $ NE.head gs)
+combineAdvice weightedAdvice =
+  normalizeDistribution $
+    groupAllWith1 snd dirtyArmDistribution
+      <&> \gs -> (getSum $ sconcat (gs <&> Sum . fst), snd $ NE.head gs)
   where
-    dirtyArmDistribution = sconcat $
-      weightedAdvice
-        <&> \(wi, advices) -> advices
-          <&> \(p, ai) -> (R.unrefine p * R.unrefine wi, ai)
+    dirtyArmDistribution =
+      sconcat $
+        weightedAdvice
+          <&> \(wi, advices) ->
+            advices
+              <&> \(p, ai) -> (R.unrefine p * R.unrefine wi, ai)
 
 -- | \( \mu = \sqrt{\frac{\ln N }{ (T(K+4))}} \)
 mkMu :: Exp4R s a er -> Double

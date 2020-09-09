@@ -1,3 +1,4 @@
+{-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- |
@@ -50,26 +51,30 @@ import System.Random
 --
 -- * @l@ is a superset of admissible losses \(\mathbb{L}\) (statically
 -- known).
-class Bandit b hyper a l | b -> l, b -> hyper, b -> a where
+data Bandit b hyper a l = Bandit
+  { -- | Init hyper returns the initial state of the algorithm and the
+    -- first action.
+    init :: forall g. (RandomGen g) => g -> hyper -> (b, a, g),
+    -- | @step loss@ iterates the bandit process one step forward.
+    step :: forall g m. (RandomGen g, MonadState b m) => g -> l -> m (a, g)
+  }
 
-  -- | Init hyper returns the initial state of the algorithm and the
-  -- first action.
-  init :: (RandomGen g) => g -> hyper -> (b, a, g)
-
-  -- | @step loss@ iterates the bandit process one step forward.
-  step :: (RandomGen g, MonadState b m) => g -> l -> m (a, g)
-
--- | ContextualBandit b hyper a l er is the class for a contextual bandit algorithm.
--- The same concepts as 'Bandit' apply, with the addition of:
+-- | ContextualBandit b hyper a l er is the class for a contextual bandit
+-- algorithm. The same concepts as 'Bandit' apply, with the addition of:
 --
 -- * @er@ is an expert representation (see 'ExpertRepresentation')
-class (ExpertRepresentation er s a) => ContextualBandit b hyper s a l er | b -> l, b -> hyper, b -> s, b -> a, b -> er where
-
-  -- | Init hyper returns the initial state of the algorithm
-  initCtx :: hyper -> b
-
-  -- | @step loss@ iterates the bandit process one step forward.
-  stepCtx :: (RandomGen g, MonadState b m, Ord a) => g -> l -> s -> m (a, g)
+data ContextualBandit b hyper s a l er = ContextualBandit
+  { -- | Init hyper returns the initial state of the algorithm
+    initCtx :: hyper -> b,
+    -- | @step loss@ iterates the bandit process one step forward.
+    stepCtx ::
+      forall g m.
+      (RandomGen g, MonadState b m, Ord a) =>
+      g ->
+      l ->
+      s ->
+      m (a, g)
+  }
 
 -- | ExpertRepresentation er s a is a representation that can be casted
 -- into a distribution over actions.

@@ -13,6 +13,7 @@
 module Bandit.Exp3
   ( -- * State
     Exp3 (..),
+    exp3,
 
     -- * Internal
     Weight (..),
@@ -32,13 +33,12 @@ import qualified Refined as R
 import System.Random
 
 -- | The EXP3 state
-data Exp3 a
-  = Exp3
-      { t :: Int,
-        lastAction :: a,
-        k :: Int,
-        weights :: NonEmpty (Weight a)
-      }
+data Exp3 a = Exp3
+  { t :: Int,
+    lastAction :: a,
+    k :: Int,
+    weights :: NonEmpty (Weight a)
+  }
   deriving (Show, Generic)
 
 -- | Probability of picking an action
@@ -50,43 +50,43 @@ newtype CumulativeLoss = CumulativeLoss {getCumulativeLoss :: Double}
   deriving (Show, Generic)
 
 -- | Exp3 weight for one action
-data Weight a
-  = Weight
-      { probability :: Probability,
-        cumulativeLoss :: CumulativeLoss,
-        action :: a
-      }
+data Weight a = Weight
+  { probability :: Probability,
+    cumulativeLoss :: CumulativeLoss,
+    action :: a
+  }
   deriving (Show, Generic)
 
 -- | The Exponential-weight algorithm for Exploration and Exploitation (EXP3).
-instance
-  (Eq a) =>
-  Bandit (Exp3 a) (Arms a) a (ZeroOne Double)
-  where
-
-  init g (Arms as) =
-    ( Exp3
-        { t = 1,
-          lastAction = a,
-          k = length as,
-          weights = ws
-        },
-      a,
-      g'
-    )
-    where
-      awl = as <&> (Bandit.Types.one,)
-      (a, g') = sampleWL awl g
-      ws = as <&> Weight (Probability $ 1.0 / fromIntegral (length (toList as))) (CumulativeLoss 0)
-
-  step g (R.unrefine -> l) = do
-    oldAction <- use #lastAction
-    #weights %= fmap (\w -> if action w == oldAction then updateCumLoss l w else w)
-    t <- use #t
-    k <- use #k
-    #weights %= recompute t k
-    #t += 1
-    pickAction g
+exp3 :: (Eq a) => Bandit (Exp3 a) (Arms a) a (ZeroOne Double)
+exp3 =
+  Bandit
+    { init = \g (Arms as) ->
+        let awl = as <&> (Bandit.Types.one,)
+            (a, g') = sampleWL awl g
+            ws =
+              as
+                <&> Weight
+                  (Probability $ 1.0 / fromIntegral (length (toList as)))
+                  (CumulativeLoss 0)
+         in ( Exp3
+                { t = 1,
+                  lastAction = a,
+                  k = length as,
+                  weights = ws
+                },
+              a,
+              g'
+            ),
+      step = \g (R.unrefine -> l) -> do
+        oldAction <- use #lastAction
+        #weights %= fmap (\w -> if action w == oldAction then updateCumLoss l w else w)
+        t <- use #t
+        k <- use #k
+        #weights %= recompute t k
+        #t += 1
+        pickAction g
+    }
 
 pickAction :: (RandomGen g, MonadState (Exp3 a) m) => g -> m (a, g)
 pickAction g = do
